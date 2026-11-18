@@ -18,6 +18,7 @@ async function loadConfig() {
       name: process.env.DB_NAME || "examcloud",
       user: process.env.DB_USER || "root",
       password: process.env.DB_PASSWORD || "",
+      ssl: process.env.DB_SSL === "true",
     },
     jwtSecret: process.env.JWT_SECRET || "dev-only-secret-change-me",
     s3Bucket: process.env.S3_BUCKET || "",
@@ -27,6 +28,19 @@ async function loadConfig() {
     loginMaxFailedAttempts: parseInt(process.env.LOGIN_MAX_FAILED_ATTEMPTS || "5", 10),
     loginLockoutMinutes: parseInt(process.env.LOGIN_LOCKOUT_MINUTES || "10", 10),
   };
+
+  if (process.env.DATABASE_URL && !process.env.DB_HOST) {
+    const u = new URL(process.env.DATABASE_URL);
+    cfg.db.host = u.hostname;
+    cfg.db.port = parseInt(u.port || "3306", 10);
+    cfg.db.name = u.pathname.replace(/^\//, "") || cfg.db.name;
+    cfg.db.user = decodeURIComponent(u.username);
+    cfg.db.password = decodeURIComponent(u.password);
+    const sslParam = (u.searchParams.get("ssl") || u.searchParams.get("ssl-mode") || "").toLowerCase();
+    if (sslParam === "true" || sslParam === "required" || sslParam === "verify_ca" || sslParam === "verify_identity") {
+      cfg.db.ssl = true;
+    }
+  }
 
   if (process.env.DB_SECRET_ARN || process.env.APP_SECRET_ARN) {
     const sm = new SecretsManagerClient({ region: cfg.awsRegion });

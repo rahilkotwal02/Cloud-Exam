@@ -39,46 +39,72 @@ function shuffleArray(arr) {
   return a;
 }
 
-async function main() {
-  const cfg = await loadConfig();
-  const pool = await createPool(cfg);
-  await initSchema(pool, cfg);
-  const aws = makeAws(cfg);
+let cfg = null;
+let pool = null;
+let aws = null;
+let initPromise = null;
 
-  const app = express();
-  app.disable("x-powered-by");
-  app.use(
-    helmet({
-      contentSecurityPolicy: {
-        directives: {
-          defaultSrc: ["'self'"],
-          styleSrc: ["'self'", "'unsafe-inline'"],
-          scriptSrc: ["'self'"],
-          imgSrc: ["'self'", "data:"],
-          upgradeInsecureRequests: null,
-        },
+async function ensureInit() {
+  if (pool) return;
+  if (!initPromise) {
+    initPromise = (async () => {
+      cfg = await loadConfig();
+      pool = await createPool(cfg);
+      await initSchema(pool, cfg);
+      aws = makeAws(cfg);
+    })().catch((err) => {
+      initPromise = null;
+      pool = null;
+      throw err;
+    });
+  }
+  await initPromise;
+}
+
+const app = express();
+app.disable("x-powered-by");
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        scriptSrc: ["'self'"],
+        imgSrc: ["'self'", "data:"],
+        upgradeInsecureRequests: null,
       },
-      hsts: false,
-    })
-  );
-  app.use(express.json({ limit: "500kb" }));
+    },
+    hsts: false,
+  })
+);
+app.use(express.json({ limit: "500kb" }));
 
-  // ---- Health checks ----
-  app.get("/health", (req, res) => res.json({ status: "ok", host: os.hostname() }));
-  app.get(
-    "/health/deep",
-    wrap(async (req, res) => {
-      await pool.query("SELECT 1");
-      res.json({ status: "ok", db: "up", host: os.hostname() });
-    })
-  );
-  app.get("/api/info", (req, res) =>
-    res.json({
-      host: os.hostname(),
-      uptime_s: Math.round(process.uptime()),
-      institution: "ExamCloud University Examination Authority",
-    })
-  );
+// ---- Health checks & Static files (do not require DB init) ----
+app.get("/health", (req, res) => res.json({ status: "ok", host: os.hostname() }));
+app.get("/api/info", (req, res) =>
+  res.json({
+    host: os.hostname(),
+    uptime_s: Math.round(process.uptime()),
+    institution: "ExamCloud University Examination Authority",
+  })
+);
+app.use(express.static(path.join(__dirname, "public")));
+
+// Lazy DB & config initialization for Vercel serverless and direct runs
+app.use(
+  wrap(async (req, res, next) => {
+    await ensureInit();
+    next();
+  })
+);
+
+app.get(
+  "/health/deep",
+  wrap(async (req, res) => {
+    await pool.query("SELECT 1");
+    res.json({ status: "ok", db: "up", host: os.hostname() });
+  })
+);
 
   // ---- Auth tokens and middleware ----
   const sign = (u) =>
@@ -1503,18 +1529,26 @@ async function main() {
     })
   );
 
-  // Static files and error handling
-  app.use(express.static(path.join(__dirname, "public")));
+  // Error handling
   app.use("/api", (req, res) => res.status(404).json({ error: "API endpoint not found." }));
   app.use((err, req, res, next) => {
     console.error("Unhandled server exception:", err);
     res.status(500).json({ error: "Something went wrong on the server." });
   });
 
-  app.listen(cfg.port, () => console.log(`ExamCloud University Portal active on :${cfg.port} (host ${os.hostname()})`));
-}
+// Export Express app for Vercel Serverless / Express runtime
+module.exports = app;
 
-main().catch((err) => {
-  console.error("Fatal startup error:", err);
-  process.exit(1);
-});
+// Start HTTP listener when run directly (Docker, EC2, or local `node server.js`)
+if (require.main === module) {
+  ensureInit()
+    .then(() => {
+      app.listen(cfg.port, () =>
+        console.log(`ExamCloud University Portal active on :${cfg.port} (host ${os.hostname()})`)
+      );
+    })
+    .catch((err) => {
+      console.error("Fatal startup error:", err);
+      process.exit(1);
+    });
+}

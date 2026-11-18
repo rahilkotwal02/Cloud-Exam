@@ -83,13 +83,31 @@ const DEMO_QUESTIONS = [
 ];
 
 async function createPool(cfg) {
+  const ssl = cfg.db.ssl ? { rejectUnauthorized: false } : undefined;
   // Create the database if it does not exist, then open the pool on it.
-  const admin = await mysql.createConnection({ host: cfg.db.host, port: cfg.db.port, user: cfg.db.user, password: cfg.db.password });
-  await admin.query(`CREATE DATABASE IF NOT EXISTS \`${cfg.db.name}\` CHARACTER SET utf8mb4`);
-  await admin.end();
+  // Skip gracefully if the managed DB user lacks global CREATE DATABASE privileges.
+  try {
+    const admin = await mysql.createConnection({
+      host: cfg.db.host,
+      port: cfg.db.port,
+      user: cfg.db.user,
+      password: cfg.db.password,
+      ssl,
+    });
+    await admin.query(`CREATE DATABASE IF NOT EXISTS \`${cfg.db.name}\` CHARACTER SET utf8mb4`);
+    await admin.end();
+  } catch (err) {
+    console.warn("Skipping CREATE DATABASE (using pre-existing DB):", err.message);
+  }
   return mysql.createPool({
-    host: cfg.db.host, port: cfg.db.port, user: cfg.db.user, password: cfg.db.password,
-    database: cfg.db.name, waitForConnections: true, connectionLimit: 10,
+    host: cfg.db.host,
+    port: cfg.db.port,
+    user: cfg.db.user,
+    password: cfg.db.password,
+    database: cfg.db.name,
+    ssl,
+    waitForConnections: true,
+    connectionLimit: 10,
   });
 }
 
