@@ -1,0 +1,24 @@
+# Run the whole app on your laptop: docker compose up --build
+# Open http://localhost:3000  (admin@examcloud.local / Admin@12345)
+services:
+  db:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: localpass
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-plocalpass"]
+      interval: 5s
+      retries: 20
+  web:
+    build: ./app
+    ports: ["80:3000", "3000:3000"]
+    volumes:
+      - ./app:/app
+      - /app/node_modules
+    environment:
+      DB_HOST: db
+      DB_USER: root
+      DB_PASSWORD: localpass
+    depends_on:
+      db:
+        condition: service_healthy
